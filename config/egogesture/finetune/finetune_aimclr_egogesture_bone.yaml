@@ -1,0 +1,57 @@
+work_dir: ./work_dir/egogesture/aimclr_finetune_bone
+
+# 1. 加载您最好的预训练模型
+weights: 'work_dir/egogesture/pretext_bone/epoch080_BACKBONE_ONLY.pt'
+ignore_weights: [encoder_q.fc, encoder_k, queue]  # 保持不变，加载器会用它来过滤
+
+train_feeder: feeder.feeder_egogesture.Feeder
+train_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_label.pkl
+  split: train
+  bone: true        # 保持 True (Feeder 来计算骨骼)
+  debug: false
+  use_mmap: true
+  # ... (其他 feeder 参数) ...
+
+test_feeder: feeder.feeder_egogesture.Feeder
+test_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/val_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/val_label.pkl
+  split: test
+  bone: true        # 保持 True
+  debug: false
+  use_mmap: true
+  # ... (其他 feeder 参数) ...
+
+# 🔴 关键修复：
+# 我们不再加载 AimCLR 包装器，而是直接加载它内部的 ST-GCN 模型
+model: net.st_gcn.Model
+model_args:
+  # (这些是原来 base_encoder 里面的参数，现在移到外面来)
+  in_channels: 3
+  hidden_channels: 64
+  hidden_dim: 256
+  num_class: 83      # 重要的是保留这个 83 类的分类头
+  dropout: 0.5
+  graph_args:
+    layout: 'egogesture'
+    strategy: 'spatial'
+  edge_importance_weighting: true
+# ------------------------------------------------------------------
+
+optimizer: SGD
+base_lr: 0.001       # 保持安全的低学习率
+nesterov: true
+weight_decay: 0.0001
+step: [50]
+
+device: [0]
+batch_size: 32
+test_batch_size: 32
+num_epoch: 80
+stream: 'joint'      # 🔴 保持 'joint' (用于绕过 Bug)
+
+save_interval: 5
+eval_interval: 5
+show_topk: [1, 5]

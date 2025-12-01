@@ -1,0 +1,91 @@
+
+work_dir: ./work_dir/egogesture/linear_eval_joint
+
+# Weights (指向您刚刚训练好的模型)
+weights: ./work_dir/egogesture/aimclr_pretext_joint/epoch200_acc16.17_model.pt
+# 忽略分类头和队列，因为我们要训练一个新的分类器
+ignore_weights: ['encoder_q.fc', 'encoder_k', 'queue', 'decoder']
+
+# Model
+model: net.aimclr.AimCLR
+model_args:
+  # AimCLR Args
+  base_encoder: net.ctrgcn.Model
+  pretrain: False # 线性评估模式
+
+  # Encoder Args (必须与预训练保持一致)
+  in_channels: 3
+  num_point: 21
+  num_person: 2
+  adaptive: True
+  graph: 'graph.egogesture.Graph'
+  graph_args: {}
+  # HGC 参数
+  num_hyperedges: 16
+
+  # 分类头参数 (EgoGesture 有 83 类)
+  num_class: 83
+
+# Optimizer (线性评估通常使用较高的学习率，因为只训练FC层)
+optimizer: SGD
+base_lr: 0.01
+optimizer_args:
+  momentum: 0.9
+  nesterov: True
+weight_decay: 0.0001
+
+# Learning rate scheduler
+step: [50, 75]
+#lr_decay_rate: 0.1
+
+# Training settings
+phase: train
+num_epoch: 100
+start_epoch: 0
+save_interval: 10
+eval_interval: 5
+print_log: True
+save_log: True
+log_interval: 100
+save_result: False
+
+# Feeder (标准的训练/测试 Feeder)
+#feeder: feeder.feeder_egogesture.Feeder
+train_feeder: feeder.feeder_egogesture.Feeder
+test_feeder: feeder.feeder_egogesture.Feeder
+
+train_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_label.pkl
+  split: train
+  bone: False
+  window_size: 50
+  # 线性评估时通常使用较弱的数据增强或不增强
+  shear_amplitude: -1
+  temperal_padding_ratio: -1
+  random_rot: False
+  random_choose: False
+  random_move: False
+  random_shift: False
+  normalization: False
+  debug: False
+  use_mmap: True
+
+test_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/val_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/val_label.pkl
+  split: test
+  bone: False
+  window_size: 50
+  normalization: False
+  debug: False
+  use_mmap: True
+
+# DataLoader settings
+batch_size: 32
+test_batch_size: 32
+num_worker: 0
+
+# Device
+device: [0]
+use_gpu: True

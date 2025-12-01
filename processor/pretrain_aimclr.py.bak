@@ -1,0 +1,165 @@
+import sys
+import argparse
+import yaml
+import math
+import random
+import numpy as np
+
+# torch
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+
+# torchlight
+import torchlight
+from torchlight import str2bool
+from torchlight import DictAction
+from torchlight import import_class
+
+from .processor import Processor
+from .knn_monitor import knn_monitor
+
+
+class AimCLR_Processor(Processor):
+    """
+        Processor for Pretraining AimCLR
+    """
+
+    def load_model(self):
+        self.model = self.io.load_model(self.arg.model,
+                                        **(self.arg.model_args))
+        self.model.apply(self.init_weights)
+
+    def init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_normal_(m.weight)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm2d):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm1d):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+
+    def load_optimizer(self):
+        if self.arg.optimizer == 'SGD':
+            self.optimizer = optim.SGD(
+                self.model.parameters(),
+                lr=self.arg.base_lr,
+                momentum=0.9,
+                nesterov=self.arg.nesterov,
+                weight_decay=self.arg.weight_decay)
+        elif self.arg.optimizer == 'Adam':
+            self.optimizer = optim.Adam(
+                self.model.parameters(),
+                lr=self.arg.base_lr,
+                weight_decay=self.arg.weight_decay)
+        else:
+            raise ValueError()
+
+    def adjust_lr(self):
+        if self.arg.optimizer == 'SGD' and self.arg.step:
+            lr = self.arg.base_lr * (
+                    self.arg.lr_decay_rate ** np.sum(self.meta_info['epoch'] >= np.array(self.arg.step)))
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
+            self.lr = lr
+        else:
+            self.lr = self.arg.base_lr
+
+    def train(self, epoch):
+        self.model.train()
+        self.adjust_lr()
+        loader = self.data_loader['train']
+        loss_value = []
+
+        for data, label in loader:
+            self.global_step += 1
+
+            # get data
+            data = data.float().to(self.dev, non_blocking=True)
+            label = label.long().to(self.dev, non_blocking=True)
+
+            # forward
+            loss = self.model(data)
+
+            # backward
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            # statistics
+            self.iter_info['loss'] = loss.data.item()
+            self.iter_info['lr'] = '{:.6f}'.format(self.lr)
+            loss_value.append(self.iter_info['loss'])
+            self.show_iter_info()
+            self.meta_info['iter'] += 1
+            self.train_log_writer(epoch)
+
+        self.epoch_info['train_mean_loss'] = np.mean(loss_value)
+        self.show_epoch_info()
+
+    def test(self, epoch):
+        self.model.eval()
+
+        # knn monitor
+        if self.arg.knn_monitor:
+            feature_extractor = self.model.encoder_q
+            acc = knn_monitor(feature_extractor, self.data_loader['memory'], self.data_loader['test'],
+                              epoch, k=self.arg.knn_k, t=self.arg.knn_t, hide_progress=True)
+            self.current_result = acc
+        else:
+            self.current_result = 0.0
+
+        self.eval_info['test_acc'] = self.current_result
+        self.show_eval_info()
+        self.eval_log_writer(epoch)
+
+    @staticmethod
+    def get_parser(add_help=False):
+        # parameter priority: command line > config > default
+        parser = argparse.ArgumentParser(
+            parents=[Processor.get_parser(add_help=False)],
+            add_help=add_help,
+            description='Pretrain AimCLR')
+
+        # region arguments yapf: disable
+
+        # Learning rate and optimizer
+        parser.add_argument('--base_lr', type=float, default=0.01, help='initial learning rate')
+        parser.add_argument('--step', type=int, default=[], nargs='+',
+                            help='the epoch where optimizer reduce the learning rate')
+        parser.add_argument('--lr_decay_rate', type=float, default=0.1, help='decay rate for learning rate')
+        parser.add_argument('--nesterov', type=str2bool, default=True, help='use nesterov or not')
+        parser.add_argument('--weight_decay', type=float, default=0.0001, help='weight decay for optimizer')
+
+        # KNN monitor
+        parser.add_argument('--knn_monitor', type=str2bool, default=True, help='knn monitor')
+        parser.add_argument('--knn_k', type=int, default=200, help='knn k')
+        parser.add_argument('--knn_t', type=float, default=0.1, help='knn t')
+
+        # ✅ 添加缺失的参数
+        # Data augmentation parameters (这些参数在配置文件中但未在 parser 中定义)
+        parser.add_argument('--aug_method', type=str, default='aimclr',
+                            help='augmentation method for pretraining')
+        parser.add_argument('--shear_amplitude', type=float, default=0.5,
+                            help='amplitude of shear augmentation')
+        parser.add_argument('--temperal_padding_ratio', type=int, default=6,
+                            help='temporal padding ratio for augmentation')
+
+        # Stream parameter (虽然可能不需要，但防止报错)
+        parser.add_argument('--stream', type=str, default='joint',
+                            help='stream type: joint, bone, or motion')
+
+        # Random seed
+        parser.add_argument('--seed', type=int, default=1, help='random seed')
+
+        # Feeder type (如果配置文件中有的话)
+        parser.add_argument('--feeder', type=str, default='feeder.feeder',
+                            help='data feeder')
+
+        # endregion yapf: enable
+
+        return parser

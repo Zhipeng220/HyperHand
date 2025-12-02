@@ -1,0 +1,126 @@
+work_dir: ./work_dir/egogesture/aimclr_pretext_joint_mac_v2_boolean_switches
+
+model: net.aimclr.AimCLR
+model_args:
+  base_encoder: net.ctrgcn.Model
+  pretrain: True
+  feature_dim: 256
+  queue_size: 8192
+  momentum: 0.990
+  Temperature: 0.07
+  mlp: True
+
+  in_channels: 3
+  num_class: 256
+  drop_out: 0.5
+  num_point: 21
+  num_person: 2
+  adaptive: True
+  graph: 'graph.egogesture.Graph'
+  graph_args: {}
+  num_hyperedges: 16
+
+loss: nt_xent_loss
+loss_args:
+  temperature: 0.07
+
+# ==========================================
+# [NEW] 模块开关 (Explicit Boolean Switches)
+# ==========================================
+use_mae: True          # 控制是否启用 MAE 重建分支
+use_physics: True      # 控制是否启用物理约束 (依赖 use_mae=True)
+
+# 损失权重
+lambda_cl: 1.0
+lambda_rec: 0.5
+lambda_phy_max: 1.0
+lambda_align: 0.1
+
+mask_ratio: 0.75
+mask_strategy: 'structured'
+
+grad_clip_norm: 1.0
+grad_accum_steps: 4
+
+optimizer: SGD
+base_lr: 0.01
+optimizer_args:
+  momentum: 0.9
+  nesterov: True
+weight_decay: 0.001
+
+lr_scheduler: cosine
+lr_decay_rate: 0.1
+
+phase: train
+num_epoch: 400
+start_epoch: 0
+save_interval: 5
+eval_interval: 5
+print_log: True
+save_log: True
+log_interval: 100
+save_result: False
+
+aug_method: aimclr
+shear_amplitude: 0.7
+temperal_padding_ratio: 6
+stream: joint
+
+seed: 1
+
+feeder: feeder.feeder_egogesture.Feeder
+train_feeder: feeder.feeder_egogesture.Feeder
+test_feeder: feeder.feeder_egogesture.Feeder
+memory_feeder: feeder.feeder_egogesture.Feeder
+
+train_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_label.pkl
+  split: train
+  bone: False
+  window_size: 50
+  shear_amplitude: 0.7
+  temperal_padding_ratio: 6
+  random_rot: True
+  random_choose: True
+  random_move: True
+  random_shift: True
+  normalization: False
+  debug: False
+  use_mmap: True
+
+test_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/val_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/val_label.pkl
+  split: test
+  bone: False
+  window_size: 50
+  normalization: False
+  debug: True
+  use_mmap: True
+
+memory_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_label.pkl
+  split: train
+  bone: False
+  window_size: 50
+  normalization: False
+  random_rot: False
+  random_choose: False
+  random_move: False
+  random_shift: False
+  debug: False
+  use_mmap: True
+
+batch_size: 32
+test_batch_size: 32
+num_worker: 4
+
+device: [0]
+use_gpu: True
+
+knn_monitor: True
+knn_k: 200
+knn_t: 0.1

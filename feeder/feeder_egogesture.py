@@ -29,6 +29,8 @@ class Feeder(Dataset):
         p_interval: sampling interval for test
         shear_amplitude: amplitude of shear augmentation
         temperal_padding_ratio: temporal padding ratio for augmentation
+        mean_map: (New) external mean map for normalization
+        std_map: (New) external std map for normalization
     """
 
     def __init__(self,
@@ -47,7 +49,9 @@ class Feeder(Dataset):
                  random_rot=False,
                  p_interval=1,
                  shear_amplitude=0.5,
-                 temperal_padding_ratio=6):
+                 temperal_padding_ratio=6,
+                 mean_map=None,  # [FIX] 新增：接收外部传入的均值
+                 std_map=None):  # [FIX] 新增：接收外部传入的方差
 
         self.debug = debug
         self.data_path = data_path
@@ -66,10 +70,16 @@ class Feeder(Dataset):
         self.shear_amplitude = shear_amplitude
         self.temperal_padding_ratio = temperal_padding_ratio
 
+        # [FIX] 初始化统计量
+        self.mean_map = mean_map
+        self.std_map = std_map
+
         self.load_data()
 
         if normalization:
-            self.get_mean_map()
+            # [FIX] 只有当外部没有传入统计量时（通常是训练集初始化时），才计算新的统计量
+            if self.mean_map is None or self.std_map is None:
+                self.get_mean_map()
 
     def load_data(self):
         # Load data
@@ -100,7 +110,7 @@ class Feeder(Dataset):
         data = self.data
         N, C, T, V, M = data.shape
 
-        # [FIX] 先计算 Bone 数据，确保统计量正确
+        # [FIX 1] 如果是 Bone 模式，先将数据转换为 Bone 向量再计算统计量
         if self.bone:
             print("Calculating mean/std for Bone stream...")
             bone_data = np.zeros_like(data)
@@ -108,9 +118,19 @@ class Feeder(Dataset):
                 bone_data[:, :, :, v1, :] = data[:, :, :, v1, :] - data[:, :, :, v2, :]
             data = bone_data
 
-        self.mean_map = data.mean(axis=2, keepdims=True).mean(axis=4, keepdims=True).mean(axis=0)
+        # [FIX 2 - 关键修复] 如果是 Velocity (Motion) 模式，先计算速度再算均值！
+        # 之前的代码直接用位置(data)的均值去归一化速度，导致数值完全错误。
+        if self.vel:
+            print("Calculating mean/std for Velocity stream...")
+            vel_data = np.zeros_like(data)
+            vel_data[:, :, :-1, :, :] = data[:, :, 1:, :, :] - data[:, :, :-1, :, :]
+            # 最后一帧速度补0
+            vel_data[:, :, -1, :, :] = 0
+            data = vel_data
 
-        # [CRITICAL FIX] 增加 1e-4 防止除以零 (MPS Friendly)
+        self.mean_map = data.mean(axis=2, keepdims=True).mean(axis=4, keepdims=True).mean(axis=0)
+        
+        # [FIX 3] 增加 1e-4 防止除以零 (对 MPS/Float16 非常重要)
         self.std_map = data.transpose((0, 2, 4, 1, 3)).reshape((N * T * M, C * V)).std(axis=0).reshape(
             (C, 1, V, 1)) + 1e-4
 
@@ -157,9 +177,10 @@ class Feeder(Dataset):
 
         # Normalization
         if self.normalization:
-            # [CRITICAL FIX 1] 增加分母的 epsilon 到 1e-4，防止 MPS 上除以极小值产生 Inf
+            # [FIX 4] 使用修正后的 mean_map/std_map (对应当前数据流类型)
+            # 增加 1e-4 防止除零
             data_numpy = (data_numpy - self.mean_map) / (self.std_map + 1e-4)
-            # [CRITICAL FIX 2] 强制清洗数据：将 NaN 变为 0，将 Inf 截断为 ±100
+            # [FIX 5] 强制清洗数据：防止 NaN/Inf 进入网络 (MPS 崩溃杀手)
             data_numpy = np.nan_to_num(data_numpy, copy=False, nan=0.0, posinf=100.0, neginf=-100.0)
 
         # Shear augmentation (for AimCLR)

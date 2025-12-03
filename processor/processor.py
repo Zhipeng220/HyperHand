@@ -45,6 +45,7 @@ class Processor(IO):
         if self.arg.phase == 'train':
             if os.path.isdir(self.arg.work_dir + '/train'):
                 print('log_dir: ', self.arg.work_dir, 'already exist')
+                # 只有当确实存在且不是关键目录时才删除，这里保留原有逻辑
                 shutil.rmtree(self.arg.work_dir + '/train')
                 shutil.rmtree(self.arg.work_dir + '/val')
                 print('Dir removed: ', self.arg.work_dir + '/train')
@@ -86,10 +87,11 @@ class Processor(IO):
     def load_data(self):
         self.data_loader = dict()
 
+        # 1. 加载训练集
         if self.arg.train_feeder_args:
             train_feeder = import_class(self.arg.train_feeder)
 
-            # ✅ 修改：简化 num_workers 计算
+            # 计算 num_workers
             num_workers = self.arg.num_worker
             if self.arg.use_gpu and len(self.gpus) > 1:
                 num_workers = self.arg.num_worker * len(self.gpus)
@@ -103,16 +105,33 @@ class Processor(IO):
                 drop_last=True,
                 worker_init_fn=init_seed)
 
+        # [FIX] 从训练集获取统计量 (mean_map, std_map)
+        train_mean_map = None
+        train_std_map = None
+        if 'train' in self.data_loader:
+            if hasattr(self.data_loader['train'].dataset, 'mean_map'):
+                train_mean_map = self.data_loader['train'].dataset.mean_map
+                train_std_map = self.data_loader['train'].dataset.std_map
+                # print(f"Train stats loaded. Mean shape: {train_mean_map.shape}")
+
+        # 2. 加载测试集
         if self.arg.test_feeder_args:
             test_feeder = import_class(self.arg.test_feeder)
 
-            # ✅ 修改：简化 num_workers 计算
             num_workers = self.arg.num_worker
             if self.arg.use_gpu and len(self.gpus) > 1:
                 num_workers = self.arg.num_worker * len(self.gpus)
 
+            # [FIX] 将训练集的统计量注入到测试集参数中
+            # 这样测试集就会使用训练集的分布进行归一化，而不是使用测试集自己的
+            test_args = self.arg.test_feeder_args.copy()  # 复制配置，避免修改原始参数
+            if train_mean_map is not None:
+                test_args['mean_map'] = train_mean_map
+                test_args['std_map'] = train_std_map
+                # print("Injected training stats into test feeder.")
+
             self.data_loader['test'] = torch.utils.data.DataLoader(
-                dataset=test_feeder(**self.arg.test_feeder_args),
+                dataset=test_feeder(**test_args),
                 batch_size=self.arg.test_batch_size,
                 shuffle=False,
                 pin_memory=True,

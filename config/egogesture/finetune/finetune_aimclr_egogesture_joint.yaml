@@ -1,0 +1,58 @@
+# 1. 工作目录 (新的)
+work_dir: ./work_dir/egogesture/aimclr_finetune_joint
+
+# 2. 权重加载 (指向新的、已清理的“关节点”模型)
+weights: 'work_dir/egogesture/aimclr_pretext_joint/epoch070_JOINT_BACKBONE_ONLY.pt'
+ignore_weights: []  # 我们的新文件已经清理过了，所以不需要忽略任何东西
+
+# 3. 训练数据加载器 (Feeder)
+train_feeder: feeder.feeder_egogesture.Feeder
+train_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/train_label.pkl
+  split: train
+  bone: false       # 🔴 关键改动: 使用关节点
+  debug: false
+  use_mmap: true
+
+# 4. 测试数据加载器 (Feeder)
+test_feeder: feeder.feeder_egogesture.Feeder
+test_feeder_args:
+  data_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/val_data.npy
+  label_path: /Users/gzp/Desktop/exp/CTR-GCN-main/data/egogesture/val_label.pkl
+  split: test
+  bone: false       # 🔴 关键改动: 使用关节点
+  debug: false
+  use_mmap: true
+
+# 5. 模型定义 (🔴 保持 Bug 修复)
+# 我们直接加载 ST-GCN 模型来绕过 finetune_evaluation.py 的 Bug
+model: net.st_gcn.Model
+model_args:
+  in_channels: 3
+  hidden_channels: 64
+  hidden_dim: 256
+  num_class: 83      # 83 类分类头
+  dropout: 0.5
+  graph_args:
+    layout: 'egogesture'
+    strategy: 'spatial'
+  edge_importance_weighting: true
+
+# 6. 优化器 (🔴 保持 0.001 的微调学习率)
+optimizer: SGD
+base_lr: 0.001       # 保持安全的低学习率
+nesterov: true
+weight_decay: 0.0001
+step: [50]
+
+# 7. 运行设置
+device: [0]
+batch_size: 32
+test_batch_size: 32
+num_epoch: 80
+stream: 'joint'      # 🔴 保持 'joint' (用于绕过 Bug)
+
+save_interval: 5
+eval_interval: 5
+show_topk: [1, 5]
